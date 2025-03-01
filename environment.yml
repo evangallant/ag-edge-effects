@@ -1,0 +1,29 @@
+name: edge-effects
+channels:
+  # - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - geopandas
+  - rasterio
+  - xarray
+  - scipy
+  - earthpy
+  - jupyterlab
+  - seaborn
+  - folium
+  - pycaret
+  - tensorflow
+  - pytorch
+  - opencv
+  - gdal
+  - pip
+  - pip:
+    - tensorflow-addons
+    - sentinelsat
+    - eemont
+    - geemap
