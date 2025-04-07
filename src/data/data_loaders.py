@@ -175,7 +175,7 @@ def return_neonrgb_data (map, start_date, end_date, roi):
         .filterDate(start_date, end_date) \
         .filter('NEON_SITE == "UKFS"').mosaic()
     
-
+    Map.add_layer(dataset, {min: 40, max:200}, 'NEON RGB data')
     Map.addLayer(ee.FeatureCollection([ee.Feature(roi)]), {}, 'ROI', False)   # ROI checking layer
 
     return Map
