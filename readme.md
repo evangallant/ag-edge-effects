@@ -58,8 +58,8 @@ USFS data:
 <br>
 ![alt text](/figs/snow_usfs.png)
 
-**Leadville:**
-However, it's not perfect. Again the model is very aware of the landscape and vegetation density, but sometimes makes radically different overall categorizations than the USFS data. This is likely due to differences in when the images used to make predictions were taken. This model uses images from July exclusively, and as such identifies what it sees based on what is most similar to appear in July, in Colorado.
+**Boise:**
+However, it's not perfect. Again the model is very aware of the landscape and vegetation density, but sometimes makes radically different overall categorizations than the USFS data. This is likely due to differences in when the images used to make predictions were taken (as the USFS data contains many 'Snow' predictions), as well as the fact that this ROI is in Idaho, as opposed to Colorado.
 
 Raw Sentinel 2 imagery:
 <br>
@@ -97,7 +97,6 @@ Predictions:
 <br>
 
 **Sahara:**
-
 When provided with an image of the Sahara Desert, it predicts that everything is either Trees or Tall Shrubs and Trees Mix:
 
 Raw Sentinel 2 imagery:
