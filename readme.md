@@ -43,30 +43,38 @@ Here we look two ROIs in Colorado which have similar Rocky Mountain-esque terain
 Despite the imperfect nature of the USFS data, the capacity of this model is shown here. The model accurately recognizes and categorizes the differences in vegetation types between north and south facing slopes in foothill features, and not only provides an upscaled map of the USFS data, but also addresses the small scale imperfections that define the low resolution approach. Here we see the model carefully discern between sparesly vegetated southern hill slopes and the densely forested northern sides while sticking the the same general categorization scheme as is present in the USFS data:
 
 Raw Sentinel 2 imagery:
+<br>
 ![alt text](/figs/snow_s2.png)
 <br>
 Overlain predictions:
+<br>
 ![alt text](/figs/snow_5050.png)
 <br>
 Predictions:
+<br>
 ![alt text](/figs/snow_preds.png)
 <br>
 USFS data:
+<br>
 ![alt text](/figs/snow_usfs.png)
 
 **Leadville:**
 However, it's not perfect. Again the model is very aware of the landscape and vegetation density, but sometimes makes radically different overall categorizations than the USFS data. This is likely due to differences in when the images used to make predictions were taken. This model uses images from July exclusively, and as such identifies what it sees based on what is most similar to appear in July, in Colorado.
 
 Raw Sentinel 2 imagery:
+<br>
 ![alt text](/figs/idaho_s2.png)
 <br>
 Overlain predictions:
+<br>
 ![alt text](/figs/idaho_5050.png)
 <br>
 Predictions:
+<br>
 ![alt text](/figs/idaho_preds.png)
 <br>
 USFS data:
+<br>
 ![alt text](/figs/idaho_usfs.png)
 
 ### **What it thinks of an ROI in a completely different area:**
@@ -76,12 +84,15 @@ And of course, when applied to diffent parts of the world the model breaks down.
 Here the model recognizes that some areas of the image are highly photosynthetically productive, but attributes it to a mixed composition of treed and shrubs, instead of just highly productive marshland surrounding a lake.
 
 Raw Sentinel 2 imagery:
+<br>
 ![alt text](/figs/canada_s2.png)
 <br>
 Overlain predictions:
+<br>
 ![alt text](/figs/canada_5050.png)
 <br>
 Predictions:
+<br>
 ![alt text](/figs/canada_preds.png)
 <br>
 
@@ -90,11 +101,14 @@ Predictions:
 When provided with an image of the Sahara Desert, it predicts that everything is either Trees or Tall Shrubs and Trees Mix:
 
 Raw Sentinel 2 imagery:
+<br>
 ![alt text](/figs/sahara_s2.png)
 <br>
 Overlain predictions:
+<br>
 ![alt text](/figs/sahara_5050.png)
 <br>
 Predictions:
+<br>
 ![alt text](/figs/sahara_preds.png)
 <br>
