@@ -37,7 +37,7 @@ While training, the model compares the output at the 10x10m resolution pixel wit
 Below are examples of the model outputs on ROIs in the same region as the training data where USFS data exists, and ROIs in various different parts of the world without USFS data to compare to.
 
 ### **Against ROIs with USFS data to compare to:**
-Here we look two ROIs in Colorado which have similar Rocky Mountain-esque terain as was prevelant in the training data.
+Here we look two ROIs in Colorado which have similar Rocky Mountain-esque terrain as was prevelant in the training data.
 
 **Snowmass:**
 Despite the imperfect nature of the USFS data, the capacity of this model is shown here. The model accurately recognizes and categorizes the differences in vegetation types between north and south facing slopes in foothill features, and not only provides an upscaled map of the USFS data, but also addresses the small scale imperfections that define the low resolution approach. Here we see the model carefully discern between sparesly vegetated southern hill slopes and the densely forested northern sides while sticking the the same general categorization scheme as is present in the USFS data:
@@ -81,7 +81,7 @@ USFS data:
 And of course, when applied to diffent parts of the world the model breaks down. It still recognizes general features, but doesn't characterize them accurately.
 
 **Southern Canada:**
-Here the model recognizes that some areas of the image are highly photosynthetically productive, but attributes it to a mixed composition of treed and shrubs, instead of just highly productive marshland surrounding a lake.
+Here the model recognizes that some areas of the image are highly photosynthetically productive, but attributes it to a mixed composition of trees and shrubs, instead of just highly productive marshland surrounding a lake.
 
 Raw Sentinel 2 imagery:
 <br>
@@ -112,3 +112,12 @@ Predictions:
 <br>
 ![alt text](/figs/sahara_preds.png)
 <br>
+
+## **Conclusion:**
+This approach demonstrates the benefits of providing surrounding context in the land use classification process. However, it is limited by:
+- The localized and relatively small nature of the training data
+- The non-seasonally agnostic approach to classification, which requires data from the summer
+- The high computational cost and inefficiency of running a 5x80x80 tensor through a CNN in order to predict the class of a single pixel
+- The need for a family of models to be trained in order to make accurate predictions in different ecological zones
+
+And likely many other things. However, I consider this project a success, as I successfully applied a number of crucial geospatial data science skills and produced a (if limitedly) helpful model. Thank you for reading!
