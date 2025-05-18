@@ -22,23 +22,23 @@ def download_sentinel2_data(start_date, end_date, roi_list, cloud_percentage=20,
     # Setup output directory
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(script_dir, '..', '..'))
-    output_folder = os.path.join(project_root, 'data', 'raw', 'sentinel2_imagery')
+    output_folder = os.path.join(project_root, 'data', 'raw', 'sentinel2_imagery', 'rgb_nir_tifs')
     os.makedirs(output_folder, exist_ok=True)
     
     # Default bands if none specified (10m and key 20m bands)
     if bands is None:
-        bands = ['B2', 'B3', 'B4']
+        bands = ['B2', 'B3', 'B4', 'B8']
     
-    date_str = f"{start_date}_to_{end_date}"
     results = {}
     
-    for roi_item in roi_list:
+    for i, roi_item in enumerate(roi_list):
+        print(f"Downloading tif {i+1}/{len(roi_list)}")
         roi_name = roi_item['name']
         bounds = roi_item['bounds']
         
         # Create an EE geometry from the bounding box
         roi_geometry = ee.Geometry.Rectangle(bounds)
-        
+         
         try:
             # Filter the image collection
             print(f"Getting data from GEE for {roi_name}")
@@ -84,8 +84,6 @@ def download_sentinel2_data(start_date, end_date, roi_list, cloud_percentage=20,
             
             # Add to results
             results[roi_name] = file_name
-
-            print(results)
             
             # Sleep to avoid hitting API limits
             time.sleep(2)
@@ -93,6 +91,8 @@ def download_sentinel2_data(start_date, end_date, roi_list, cloud_percentage=20,
         except Exception as e:
             results[roi_name] = f"Error for {roi_name}: {str(e)}"
     
+    print(results)
+
     return results
 
 def mask_s2_clouds(image):
@@ -205,66 +205,157 @@ def download_categorical_upsampling_data(roi):
 if __name__ == "__main__":
     # Configuration
     roi_list = [
+        # 7 rural     
+        # 7 developed 
+        # 7 ag        
+        # 7 wild      \
+        #     # New ROIs, different from training, W/O USFS data to compare to
         {
-            'name': 'kit_carson',
-            'bounds': [-103.532941,38.620000,-103.361656,38.737928]
+            'name': 'canada',
+            'bounds': [-105.877991,50.080057,-105.678864,50.200638]
         },
         {
-            'name': 'cripple_creek',
-            'bounds': [-104.822874,38.306231,-104.655365,38.428297]
-        },
-        {
-            'name': 'montrose',
-            'bounds': [-108.010033,38.376833,-107.867239,38.484411]
-        },
-        {
-            'name': 'cortez',
-            'bounds': [-108.599581,37.365064,-108.676009,37.265412]
-        },
-        {
-            'name': 'durango',
-            'bounds': [-107.962482,37.263124,-107.852640,37.350509]
-        },
-        {
-            'name': 'lizard_head',
-            'bounds': [-108.122764,37.784825,-108.021161,37.857507]
-        },
-        {
-            'name': 'ridgway',
-            'bounds': [-107.817840,38.171273,-107.712117,38.250044]
-        },
-        {
-            'name': 'uncompahgre',
-            'bounds': [-108.716703,38.448570,-108.631575,38.515221]
-        },
-        {
-            'name': 'yuma',
-            'bounds': [-102.996995,39.883045,-102.903629,39.958877]
-        },
-        {
-            'name': 'centennial',
-            'bounds': [-104.852499,39.555589,-104.759134,39.627551]
-        },
-        {
-            'name': 'gunnison',
-            'bounds': [-107.037647,38.466492,-106.938790,38.539572]
-        },
-        {
-            'name': 'powderhorn',
-            'bounds': [-107.265907,38.147517,-107.157438,38.231708]
-        },
-        {
-            'name': 'lake_city',
-            'bounds': [-107.063429,37.678845,-106.953588,37.759986]
-        },
-        {
-            'name': 'monte_vista',
-            'bounds': [-105.953601,37.270498,-105.843759,37.361997]
+            'name': 'france',
+            'bounds': [5.261078,45.371443,5.454712,45.503459]
         }
+        # {
+        #     'name': 'amazon',
+        #     'bounds': [-54.971952,-13.693802,-54.839130,-13.558891]
+        # },
+        # {
+        #     'name': 'sahara',
+        #     'bounds': [-3.609009,21.807958,-3.441467,21.950688]
+        # },
+        # {
+        #     # New ROIs, different from training, but w/ USFS data to compare to
+        #     'name': 'mt_yale',
+        #     'bounds': [-106.206592,38.940496,-106.060778,38.965042]
+        # },
+        # {
+        #     'name': 'boise',
+        #     'bounds': [-115.704138,43.578798,-115.550891,43.721647]
+        # },
+        # {
+        #     'name': 'snowmass',
+        #     'bounds': [-107.012190,39.267308,-106.882986,39.400934]
+        # },
+        # {
+        #     'name': 'ea_co',
+        #     'bounds': [-103.363659,39.767733,-103.203817,39.893209]
+        # },
+            # Rural
+        #     'name': 'kit_carson',
+        #     'bounds': [-103.532941,38.620000,-103.361656,38.737928]
+        # },
+        # {
+        #     # Developed
+        #     'name': 'cripple_creek',
+        #     'bounds': [-104.822874,38.306231,-104.655365,38.428297]
+        # },
+        # {
+        #     # Ag
+        #     'name': 'montrose',
+        #     'bounds': [-108.010033,38.376833,-107.867239,38.484411]
+        # },
+        # {
+        #     # Ag
+        #     'name': 'cortez',
+        #     'bounds': [-108.399581,37.165064,-108.496009,37.265412]
+        # },
+        # {
+        #     # Rural
+        #     'name': 'durango',
+        #     'bounds': [-107.962482,37.263124,-107.852640,37.350509]
+        # },
+        # {
+        #     # Wild
+        #     'name': 'lizard_head',
+        #     'bounds': [-108.122764,37.784825,-108.021161,37.857507]
+        # },
+        # {
+        #     # Rural
+        #     'name': 'ridgway',
+        #     'bounds': [-107.817840,38.171273,-107.712117,38.250044]
+        # },
+        # {
+        #     # Wild
+        #     'name': 'uncompahgre',
+        #     'bounds': [-108.716703,38.448570,-108.631575,38.515221]
+        # },
+        # {
+        #     # Ag
+        #     'name': 'yuma',
+        #     'bounds': [-102.996995,39.883045,-102.903629,39.958877]
+        # },
+        # {
+        #     # Developed
+        #     'name': 'centennial',
+        #     'bounds': [-104.852499,39.555589,-104.759134,39.627551]
+        # },
+        # {
+        #     # Rural
+        #     'name': 'gunnison',
+        #     'bounds': [-107.037647,38.466492,-106.938790,38.539572]
+        # },
+        # {
+        #     # Wild
+        #     'name': 'lake_city',
+        #     'bounds': [-107.063429,37.678845,-106.953588,37.759986]
+        # },
+        # {
+        #     # Ag
+        #     'name': 'monte_vista',
+        #     'bounds': [-105.953601,37.270498,-105.843759,37.361997]
+        # },
+        # {
+        #     # Rural
+        #     'name': 'trinidad',
+        #     'bounds': [-104.600830,37.113241,-104.503757,37.212714]
+        # },
+        # {
+        #     # Rural
+        #     'name': 'lamar',
+        #     'bounds': [-102.723885,38.022672,-102.625013,38.128034]
+        # },
+        # {
+        #     # Developed
+        #     'name': 'leadville',
+        #     'bounds': [-106.355896,39.193948,-106.256033,39.299042]
+        # },
+        # {
+        #     # Ag
+        #     'name': 'deer_tail',
+        #     'bounds': [-103.847144,39.482407,-103.743547,39.581256]
+        # },
+        # {
+        #     # Ag
+        #     'name': 'stratton',
+        #     'bounds': [-102.672729,39.179046,-102.579133,39.276284]
+        # },
+        # {
+        #     # Ag
+        #     'name': 'pritchett',
+        #     'bounds': [-102.930908,37.338500,-102.832980,37.436328]
+        # },
+        # {
+        #     # Wild
+        #     'name': 'hunter-fryingpan',
+        #     'bounds': [-106.704712,39.142842,-106.607383,39.245017]
+        # },
+        # {
+        #     # Wild
+        #     'name': 'mt_harvard',
+        #     'bounds': [-106.366882,38.892790,-106.266033,38.998909]
+        # },
+        # {
+        #     # Wild
+        #     'name': 'creede',
+        #     'bounds': [-107.006836,37.842326,-106.906760,37.942031]
+        # }
     ]
 
     # Initialize Earth Engine
     ee.Initialize(project='agedgeeffects')
 
-    # download_sentinel2_data('2021-09-01', '2021-09-30', roi_list, cloud_percentage=50, bands=None)
-    download_USFS_data('2021', '2022', roi_list)
+    download_sentinel2_data('2021-07-01', '2021-07-30', roi_list, cloud_percentage=20, bands=None)
+    # download_USFS_data('2021', '2022', roi_list)

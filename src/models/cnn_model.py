@@ -85,34 +85,112 @@ class LandCoverDataset(Dataset):
             
         return image, label
 
-# CNN Model Definition
+class SpatialAttention(nn.Module):
+    """
+    Spatial attention module that emphasizes the center of the input feature maps.
+    Combines a learned attention with a center-biased prior.
+    """
+    def __init__(self, kernel_size=7):
+        super(SpatialAttention, self).__init__()
+        # Conv layer to generate attention map
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2)
+        self.sigmoid = nn.Sigmoid()
+        
+    def forward(self, x):
+        # Generate center-biased prior (Gaussian-like)
+        batch, channels, height, width = x.size()
+        
+        # Create coordinate grids
+        y_grid, x_grid = torch.meshgrid(
+            torch.linspace(-1, 1, height, device=x.device),
+            torch.linspace(-1, 1, width, device=x.device),
+            indexing='ij'
+        )
+        
+        # Calculate distance from center (0,0)
+        distance_squared = x_grid**2 + y_grid**2
+        
+        # Convert to Gaussian with sigma=0.5 (controls how quickly attention drops off)
+        center_prior = torch.exp(-distance_squared / 0.5)
+        center_prior = center_prior.unsqueeze(0).unsqueeze(0)
+        
+        # Generate feature-derived attention
+        # Channel pooling: avg_pool captures general activations, max_pool captures salient features
+        avg_pool = torch.mean(x, dim=1, keepdim=True)
+        max_pool, _ = torch.max(x, dim=1, keepdim=True)
+        
+        # Concatenate pooled features
+        pooled = torch.cat([avg_pool, max_pool], dim=1)
+        
+        # Generate attention map from pooled features
+        learned_attention = self.sigmoid(self.conv(pooled))
+        
+        # Combine learned attention with center prior
+        # This creates an attention map that considers both feature importance and center bias
+        combined_attention = learned_attention * center_prior
+        
+        # Visualize the attention map (for debugging)
+        # plt.imshow(combined_attention[0, 0].cpu().detach().numpy())
+        # plt.colorbar()
+        # plt.title("Spatial Attention Map")
+        # plt.show()
+        
+        return combined_attention
+
 class LandCoverCNN(nn.Module):
     def __init__(self, num_classes, block_size=15):
         super(LandCoverCNN, self).__init__()
         
-        # Input: 3×block_size×block_size
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3, padding=1)
+        # Input: 4×block_size×block_size --> RGB + NIR bands
+        # We'll add NDVI as a 5th channel in the forward pass
+        self.conv1 = nn.Conv2d(5, 32, kernel_size=3, padding=1)  # 5 channels (RGB+NIR+NDVI)
         self.bn1 = nn.BatchNorm2d(32)
         self.pool1 = nn.MaxPool2d(2)
+        
+        # Attention mechanisms after first conv block
+        self.spectral_attention1 = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),    # Averages all values for the feature map into a single 1x1 value
+            nn.Conv2d(32, 8, 1),        # Channel reduction (32 --> 8) to force the model to identify only the important relationships
+            nn.ReLU(),                  # Introduce non-linearity
+            nn.Conv2d(8, 32, 1),        # Upscale back to 32 channels
+            nn.Sigmoid()                # Normalize the values to a 0-1 range, and produce a soft attention mask
+        )
+        self.spatial_attention1 = SpatialAttention(kernel_size=7)
         
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(64)
         self.pool2 = nn.MaxPool2d(2)
         
+        # Attention mechanisms after second conv block
+        self.spectral_attention2 = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(64, 16, 1),
+            nn.ReLU(),
+            nn.Conv2d(16, 64, 1),
+            nn.Sigmoid()
+        )
+        self.spatial_attention2 = SpatialAttention(kernel_size=5)
+        
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm2d(128)
         self.pool3 = nn.MaxPool2d(2)
         
+        # Attention mechanisms after third conv block
+        self.spectral_attention3 = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(128, 32, 1),
+            nn.ReLU(),
+            nn.Conv2d(32, 128, 1),
+            nn.Sigmoid()
+        )
+        self.spatial_attention3 = SpatialAttention(kernel_size=3)
+        
         # Calculate feature dimensions after pooling
-        # After 3 pooling layers (each dividing by 2), dimensions become block_size/8
         feature_size = block_size // 8
-        # Handle cases where division isn't exact
         if block_size % 8 != 0:
             feature_size = feature_size + 1
             
         self.feature_size = feature_size
-        
-        # Calculate flattened features size: channels × height × width
         flattened_size = 128 * feature_size * feature_size
         
         self.flatten = nn.Flatten()
@@ -120,19 +198,68 @@ class LandCoverCNN(nn.Module):
         self.dropout = nn.Dropout(0.5)
         self.fc2 = nn.Linear(128, num_classes)
         
-        # Print network dimensions for verification
-        print(f"Block size: {block_size}x{block_size}")
+        print(f"Block size: {block_size}×{block_size}")
         print(f"Feature map after pooling: 128 × {feature_size} × {feature_size}")
         print(f"Flattened features: {flattened_size}")
         
+    def calculate_ndvi(self, x):
+        """Calculate NDVI from RGB+NIR input"""
+        # NIR is channel 3, Red is channel 2
+        nir = x[:, 3:4, :, :]  # Extract NIR band and keep dimensions
+        red = x[:, 2:3, :, :]  # Extract Red band and keep dimensions
+        
+        # Calculate NDVI: (NIR - Red) / (NIR + Red)
+        # Adding small epsilon to avoid division by zero
+        return (nir - red) / (nir + red + 1e-8)
+        
     def forward(self, x):
-        x = self.pool1(F.relu(self.bn1(self.conv1(x))))
-        x = self.pool2(F.relu(self.bn2(self.conv2(x))))
-        x = self.pool3(F.relu(self.bn3(self.conv3(x))))
+        # Calculate NDVI and add as a 5th channel
+        ndvi = self.calculate_ndvi(x)
+        x = torch.cat([x, ndvi], dim=1)  # Concatenate along channel dimension
         
-        # For debugging size issues (optional)
-        # print(f"Shape before flatten: {x.shape}")
+        # First convolutional block
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
         
+        # Apply spectral attention (emphasize important channels)
+        spectral_weights1 = self.spectral_attention1(x)
+        x = x * spectral_weights1
+        
+        # Apply spatial attention (emphasize center region)
+        spatial_weights1 = self.spatial_attention1(x)
+        x = x * spatial_weights1
+        
+        # Continue with pooling
+        x = self.pool1(x)
+        
+        # Second convolutional block with attention
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        
+        spectral_weights2 = self.spectral_attention2(x)
+        x = x * spectral_weights2
+        
+        spatial_weights2 = self.spatial_attention2(x)
+        x = x * spatial_weights2
+        
+        x = self.pool2(x)
+        
+        # Third convolutional block
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+        
+        spectral_weights3 = self.spectral_attention3(x)
+        x = x * spectral_weights3
+        
+        spatial_weights3 = self.spatial_attention3(x)
+        x = x * spatial_weights3
+        
+        x = self.pool3(x)
+        
+        # Flatten and fully connected layers
         x = self.flatten(x)
         x = F.relu(self.fc1(x))
         x = self.dropout(x)
@@ -173,10 +300,25 @@ def train_land_cover_model(s2_blocks, classes, batch_size=32, epochs=50, learnin
     s2_blocks = s2_blocks.astype(np.float32) / 10000.0
     
     # Check if blocks are already in the right format (C, H, W)
-    if s2_blocks.shape[1] != 3:
-        # If in format (N, H, W, C), transpose to (N, C, H, W)
-        if len(s2_blocks.shape) == 4 and s2_blocks.shape[3] == 3:
+    if len(s2_blocks.shape) == 4:
+        # Determine format by analyzing shapes
+        n_samples = s2_blocks.shape[0]
+        
+        # Possible formats:
+        # (N, C, H, W) - PyTorch format, channels are dimension 1
+        # (N, H, W, C) - TensorFlow format, channels are dimension 3
+        
+        # Check which dimension is likely the channel dimension (smallest of the three)
+        potential_channel_dims = [s2_blocks.shape[1], s2_blocks.shape[2], s2_blocks.shape[3]]
+        potential_channel_idx = np.argmin(potential_channel_dims) + 1  # +1 because we skip dimension 0
+        
+        if potential_channel_idx == 3 and potential_channel_dims[2] <= 10:  # Assume max 10 bands
+            # Format is likely (N, H, W, C)
+            print(f"Detected (N, H, W, C) format with {s2_blocks.shape[3]} channels, transposing...")
             s2_blocks = np.transpose(s2_blocks, (0, 3, 1, 2))
+
+        # Print final format
+        print(f"Final data shape: {s2_blocks.shape} (N, C, H, W)")
     
     # Check data range
     print(f"Data range: {s2_blocks.min()} to {s2_blocks.max()}")
@@ -319,7 +461,12 @@ def train_land_cover_model(s2_blocks, classes, batch_size=32, epochs=50, learnin
             best_val_loss = val_loss
             patience_counter = 0
             # Save the best model
-            torch.save(model.state_dict(), 'best_land_cover_model.pth')
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'block_size': block_size,
+                'num_classes': num_classes,
+                # Any other parameters you might need
+            }, 'rgb_nir_80x80_CNN_block_model.pth')  # TODO: UPDATE MODEL PATH NAME
             print("Saved best model")
         else:
             patience_counter += 1
@@ -328,7 +475,17 @@ def train_land_cover_model(s2_blocks, classes, batch_size=32, epochs=50, learnin
                 break
     
     # 5. Load the best model for evaluation
-    model.load_state_dict(torch.load('best_land_cover_model.pth'))
+    # Load the checkpoint
+    checkpoint = torch.load('rgb_nir_80x80_CNN_block_model.pth')  # TODO: UPDATE MODEL PATH NAME
+
+    # Initialize model with the saved parameters
+    model = LandCoverCNN(
+        num_classes=checkpoint['num_classes'],
+        block_size=checkpoint['block_size']
+    )
+
+    # Load the state dictionary
+    model.load_state_dict(checkpoint['model_state_dict'])
     
     return model, history
 
@@ -399,7 +556,7 @@ def plot_training_history(history):
     plt.title('Accuracy Curves')
     
     plt.tight_layout()
-    plt.savefig('training_history.png')
+    plt.savefig('rgb_nir_training_history.png') # TODO: UPDATE FIG NAME
     plt.show()
 
 def plot_confusion_matrix(y_true, y_pred, class_names_dict):
@@ -420,7 +577,7 @@ def plot_confusion_matrix(y_true, y_pred, class_names_dict):
     plt.ylabel('True Label')
     plt.title('Normalized Confusion Matrix')
     plt.tight_layout()
-    plt.savefig('confusion_matrix.png')
+    plt.savefig('rgb_nir_confusion_matrix.png') # TODO: UPDATE FIG NAME
     plt.show()
     
     # Also print classification report
@@ -437,6 +594,17 @@ if __name__ == "__main__":
     s2_data_folder = os.path.join(project_root, 'data', 'raw', 'sentinel2_imagery')
     lc_data_folder = os.path.join(project_root, 'data', 'raw', 'USFS_land_cover')
 
+    checkpoint = torch.load('rgb_nir_80x80_CNN_block_model.pth')
+
+    # Initialize model with the saved parameters
+    model = LandCoverCNN(
+        num_classes=15,
+        block_size=checkpoint['block_size']
+    )
+
+    # Load the state dictionary
+    model.load_state_dict(checkpoint['model_state_dict'])
+
     roi_names = [
         "kit_carson",
         "cripple_creek",
@@ -451,39 +619,52 @@ if __name__ == "__main__":
         "gunnison",
         "powderhorn",
         "lake_city",
-        "monte_vista"
+        "monte_vista",
+        "boulder", 
+        "creede",
+        "deer_tail", 
+        "fort_collins",
+        "fort_morgan", 
+        "hunter-fryingpan",
+        "lamar",
+        "leadville",
+        "mt_harvard",
+        "pritchett",
+        "stratton",
+        "trinidad"
     ]
 
     roi_list = generate_roi_list(roi_names, s2_data_folder, lc_data_folder)
-    block_size = 48
+    block_size = 80
 
-    s2_blocks, classes, s2_block_metadata, utm_coords, albers_coords, lat_lon_coords = generate_training_samples(roi_list, block_size, 50000)
+    s2_blocks, classes, s2_block_metadata, utm_coords, albers_coords, lat_lon_coords = generate_training_samples(roi_list, block_size, 150000)
     
-    print(f"Loaded {len(s2_blocks)} samples with {len(np.unique(classes))} unique classes")
-    print(f"Block shape: {s2_blocks.shape}")
+    # print(f"Loaded {len(s2_blocks)} samples with {len(np.unique(classes))} unique classes")
+    # print(f"Block shape: {s2_blocks.shape}")
     
-    # Check class distribution
-    unique_classes, class_counts = np.unique(classes, return_counts=True)
-    print("\nClass distribution:")
-    for cls, count in zip(unique_classes, class_counts):
-        if count == 1:
-            print(f"Class {cls} found with {count} (should be 1) samples - exiting early")
-            raise ValueError("Class with only 1 sample found")
+    # # Check class distribution
+    # unique_classes, class_counts = np.unique(classes, return_counts=True)
+    # print("\nClass distribution:")
+    # for cls, count in zip(unique_classes, class_counts):
+    #     if count == 1:
+    #         print(f"Class {cls} found with {count} (should be 1) samples - exiting early")
+    #         raise ValueError("Class with only 1 sample found")
         
-        print(f"Class {cls} ({class_names.get(cls, 'Unknown')}): {count} samples")
+    #     print(f"Class {cls} ({class_names.get(cls, 'Unknown')}): {count} samples")
     
-    # Train model
-    model, history = train_land_cover_model(
-        s2_blocks, 
-        classes,
-        batch_size=32,
-        epochs=50,
-        learning_rate=0.001,
-        block_size=block_size
-    )
+    # # Train model
+    # model, history = train_land_cover_model(
+    #     s2_blocks, 
+    #     classes,
+    #     batch_size=32,
+    #     epochs=50,
+    #     learning_rate=0.001,
+    #     block_size=block_size
+    # )
     
-    # Visualize training progress
-    plot_training_history(history)
+    # # Visualize training progress
+    # plot_training_history(history)
+
 
     X_train, X_test, y_train, y_test = train_test_split(s2_blocks, classes, test_size=0.2, random_state=42)
 

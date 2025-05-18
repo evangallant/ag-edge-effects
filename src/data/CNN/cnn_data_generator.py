@@ -1,15 +1,278 @@
 import os
 import sys
 import rasterio
+from tqdm import tqdm
 import random
+import json
 import numpy as np
 import rasterio.crs
 from rasterio.warp import transform
+from math import sqrt
+
+def generate_time_series_training_samples(roi_list, block_size=80, sample_size=100000, output_dir="block_data"):
+    """
+    Generate training samples from time series and store on disk.
+    """
+    # Prepare metadata to store information about blocks
+    metadata = {
+        'blocks': [],
+        'classes': [],
+        'roi_names': [],
+        'target_pixels': [],
+        'utm_coords': [],
+        'albers_coords': [],
+        'lat_lon_coords': []
+    }
+    
+    # Calculate samples per ROI
+    roi_sample_size = int(sample_size/len(roi_list))
+
+    # Process each ROI
+    for i, roi_item in enumerate(roi_list):
+        roi_name = roi_item['name']
+        roi_dir = os.path.join(output_dir, f"roi_{roi_name}")
+        os.makedirs(roi_dir, exist_ok=True)
+        
+        print(f"Generating training samples for {roi_name} ROI...")
+
+        # Create list of image paths
+        s2_tif_list = [
+            roi_item['s2_path_1'],
+            roi_item['s2_path_2'], 
+            roi_item['s2_path_3'], 
+            roi_item['s2_path_4'], 
+            roi_item['s2_path_5']
+        ]
+        
+        # Verify all files exist
+        if not all(os.path.exists(path) for path in s2_tif_list):
+            missing_files = [path for path in s2_tif_list if not os.path.exists(path)]
+            print(f"Warning: Missing files for {roi_name}: {len(missing_files)} files")
+            print(f"First missing file: {missing_files[0] if missing_files else 'None'}")
+            continue
+
+        # Generate target pixels from first image
+        roi_target_pixels = generate_target_pixels(s2_tif_list[0], roi_sample_size, block_size)
+        
+        if len(roi_target_pixels) == 0:
+            print(f"Warning: No valid target pixels generated for {roi_name}")
+            continue
+
+        # Generate time series blocks and save to disk
+        block_paths, valid_targets = generate_time_series_blocks(
+            roi_target_pixels, 
+            s2_tif_list, 
+            block_size, 
+            output_dir=roi_dir
+        )
+        
+        if len(block_paths) == 0:
+            print(f"Warning: No valid time series blocks found for {roi_name}")
+            continue
+            
+        print(f"Generated {len(block_paths)} valid time series blocks for {roi_name}")
+
+        # Get the corresponding land cover classes 
+        roi_classes, roi_utm_coords, roi_albers_coords, roi_lat_lon_coords = find_matching_lc_pixel_classes(
+            roi_item['lc_path'], s2_tif_list[0], valid_targets
+        )
+
+        if len(roi_classes) > 0:
+            # Add metadata for this ROI
+            metadata['blocks'].extend(block_paths)
+            metadata['classes'].extend(roi_classes.tolist() if isinstance(roi_classes, np.ndarray) else roi_classes)
+            metadata['roi_names'].extend([roi_name] * len(block_paths))
+            metadata['target_pixels'].extend([list(target) for target in valid_targets])
+            
+            # Add coordinate information
+            metadata['utm_coords'].extend([list(coord) for coord in roi_utm_coords])
+            metadata['albers_coords'].extend([list(coord) for coord in roi_albers_coords])
+            metadata['lat_lon_coords'].extend([list(coord) for coord in roi_lat_lon_coords])
+        else:
+            print(f"Warning: No land cover classes extracted for {roi_name}")
+
+    # Verify we have samples
+    if len(metadata['blocks']) == 0:
+        print("No blocks extracted from any ROIs")
+        return "Failed to extract pixel blocks"
+    
+    # Save metadata to JSON file
+    metadata_path = os.path.join(output_dir, "metadata.json")
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f)
+    
+    print(f"Saved metadata with {len(metadata['blocks'])} samples to {metadata_path}")
+    
+    # Return paths to the saved data
+    return {
+        'metadata_path': metadata_path,
+        'n_samples': len(metadata['blocks']),
+        'n_classes': len(set(metadata['classes'])),
+        'output_dir': output_dir
+    }
+        
+def generate_time_series_blocks(target_pixels, s2_tif_list, block_size=80, output_dir="block_data"):
+    """
+    Generate image blocks from multiple time points and save to disk instead of memory.
+    
+    Parameters:
+    -----------
+    target_pixels : list
+        List of (row, col) tuples for target pixels
+    s2_tif_list : list
+        List of paths to Sentinel-2 TIF files
+    block_size : int
+        Size of blocks to extract
+    output_dir : str
+        Directory to save blocks
+        
+    Returns:
+    --------
+    block_paths : list
+        List of paths to saved blocks
+    valid_targets : list
+        List of valid target pixels
+    """
+    radius = block_size // 2
+    
+    # Create output directory structure
+    os.makedirs(output_dir, exist_ok=True)
+    blocks_dir = os.path.join(output_dir, "blocks")
+    os.makedirs(blocks_dir, exist_ok=True)
+    
+    # Track valid targets and blocks by time
+    valid_targets_by_time = {}
+    
+    # Process each time point to find valid targets
+    for t, s2_tif in enumerate(s2_tif_list):
+        print(f"Processing time point {t+1}/{len(s2_tif_list)}: {os.path.basename(s2_tif)}")
+        
+        with rasterio.open(s2_tif) as src:
+            # Get dimensions only (no need to load all data yet)
+            height, width = src.height, src.width
+            valid_targets = []
+            
+            # Check which target pixels will be valid for this time point
+            for row, col in target_pixels:
+                # Calculate block boundaries
+                row_start = row - radius
+                row_end = row + radius + 1
+                col_start = col - radius
+                col_end = col + radius + 1
+                
+                # Check if the block is fully within the image
+                if (0 <= row_start < row_end <= height and 
+                    0 <= col_start < col_end <= width):
+                    valid_targets.append((row, col))
+            
+            valid_targets_by_time[t] = valid_targets
+            print(f"  Found {len(valid_targets)} valid blocks for time point {t+1}")
+    
+    # Find targets valid across all time points
+    if len(s2_tif_list) > 0:
+        common_targets = set(valid_targets_by_time[0])
+        for t in range(1, len(s2_tif_list)):
+            common_targets = common_targets.intersection(set(valid_targets_by_time[t]))
+        
+        common_targets = list(common_targets)
+        print(f"Found {len(common_targets)} target pixels valid across all {len(s2_tif_list)} time points")
+    else:
+        common_targets = []
+    
+    # Now extract and save blocks only for common targets
+    block_paths = []
+    progress_bar = tqdm(total=len(common_targets), desc="Saving blocks to disk")
+    
+    for i, target in enumerate(common_targets):
+        target_dir = os.path.join(blocks_dir, f"block_{i:05d}")
+        os.makedirs(target_dir, exist_ok=True)
+        
+        # Store block information for each time point
+        block_data_for_target = []
+        
+        for t, s2_tif in enumerate(s2_tif_list):
+            with rasterio.open(s2_tif) as src:
+                row, col = target
+                data = src.read()
+                n_bands, height, width = data.shape
+                
+                # Extract individual bands
+                blue_band = data[0]    # B2
+                green_band = data[1]   # B3
+                red_band = data[2]     # B4
+                nir_band = data[3]     # B8
+                
+                # Calculate indices
+                indices = []
+                
+                # 1. NDVI
+                ndvi = np.zeros_like(red_band, dtype=np.float32)
+                denominator = nir_band + red_band
+                valid_mask = denominator > 0
+                ndvi[valid_mask] = (nir_band[valid_mask] - red_band[valid_mask]) / denominator[valid_mask]
+                indices.append(ndvi.reshape(1, height, width))
+                
+                # 2. EVI
+                evi = np.zeros_like(red_band, dtype=np.float32)
+                denominator = nir_band + 6 * red_band - 7.5 * blue_band + 1
+                valid_mask = denominator != 0
+                evi[valid_mask] = 2.5 * (nir_band[valid_mask] - red_band[valid_mask]) / denominator[valid_mask]
+                indices.append(evi.reshape(1, height, width))
+                
+                # 3. NDWI
+                ndwi = np.zeros_like(red_band, dtype=np.float32)
+                denominator = green_band + nir_band
+                valid_mask = denominator > 0
+                ndwi[valid_mask] = (green_band[valid_mask] - nir_band[valid_mask]) / denominator[valid_mask]
+                indices.append(ndwi.reshape(1, height, width))
+                
+                # Add SWIR indices if available
+                if n_bands >= 6:
+                    swir1_band = data[4]   # B11
+                    swir2_band = data[5]   # B12
+                    
+                    # 4. NDMI
+                    ndmi = np.zeros_like(red_band, dtype=np.float32)
+                    denominator = nir_band + swir1_band
+                    valid_mask = denominator > 0
+                    ndmi[valid_mask] = (nir_band[valid_mask] - swir1_band[valid_mask]) / denominator[valid_mask]
+                    indices.append(ndmi.reshape(1, height, width))
+                    
+                    # 5. NBR
+                    nbr = np.zeros_like(red_band, dtype=np.float32)
+                    denominator = nir_band + swir2_band
+                    valid_mask = denominator > 0
+                    nbr[valid_mask] = (nir_band[valid_mask] - swir2_band[valid_mask]) / denominator[valid_mask]
+                    indices.append(nbr.reshape(1, height, width))
+                
+                # Stack original bands with indices
+                enhanced_data = np.vstack([data] + indices)
+                
+                # Extract block
+                row_start = row - radius
+                row_end = row + radius + 1
+                col_start = col - radius
+                col_end = col + radius + 1
+                
+                block = enhanced_data[:, row_start:row_end, col_start:col_end]
+                
+                # Save block for this time point
+                time_path = os.path.join(target_dir, f"time_{t}.npy")
+                np.save(time_path, block)
+                block_data_for_target.append(time_path)
+        
+        # Save path to this block
+        block_path = target_dir
+        block_paths.append(block_path)
+        progress_bar.update(1)
+    
+    progress_bar.close()
+    return block_paths, common_targets
 
 # Function to create training samples
-def generate_training_samples(roi_list, block_size=20, sample_size=1000):
+def generate_training_samples(roi_list, block_size=80, sample_size=1000):
     """
-        Generates training sample pairs - USFS land use type at target pixel/s2 bands 15x15 pixels around target pixel
+        Generates training sample pairs - USFS land use type at target pixel/s2 bands BSxBS pixels around target pixel
         
         Parameters:
         -----------
@@ -46,7 +309,7 @@ def generate_training_samples(roi_list, block_size=20, sample_size=1000):
         # Pick roi_sample_size number of target pixels randomly from the s2 data from the current roi
         roi_target_pixels = generate_target_pixels(roi_s2_path, roi_sample_size, block_size)
 
-        # Get the 15x15 s2 pixel boxes with the target pixels at the center, and save them to the s2pixels array
+        # Get the BSxBS s2 pixel boxes with the target pixels at the center, and save them to the s2pixels array
         # Here we don't need to do any coordinate finagling, since the target pixel coords come directly from the sentinel 2 images 
         # valid_target_pixels gives us the list of all target pixels we were able to extract a pixel block for
         roi_s2_blocks, valid_target_pixels = generate_s2_pixel_blocks(roi_s2_path, roi_target_pixels, block_size)
@@ -86,8 +349,7 @@ def generate_training_samples(roi_list, block_size=20, sample_size=1000):
     
     return s2_blocks, classes, s2_block_metadata, utm_coords, albers_coords, lat_lon_coords
 
-
-def generate_target_pixels(s2_tif, roi_sample_size, block_size=15):
+def generate_target_pixels(s2_tif, roi_sample_size, block_size=80):
     # Generates roi_sample_size number of random target pixels for an roi
     target_pixels = []
 
@@ -95,7 +357,7 @@ def generate_target_pixels(s2_tif, roi_sample_size, block_size=15):
     with rasterio.open(s2_tif) as src:
         b1 = src.read(1)
         rows, cols = b1.shape
-        buffer = block_size * 2.5
+        buffer = int(block_size * 3)
 
         # Generate random target pixels
         for i in range(roi_sample_size):
@@ -107,8 +369,8 @@ def generate_target_pixels(s2_tif, roi_sample_size, block_size=15):
 
     return target_pixels
 
-def generate_s2_pixel_blocks(s2_tif, target_pixels, block_size=15):
-    # Given a set of target pixels, return a list of arrays which contain the 15x15 pixel blocks with all 3 RGB bands
+def generate_s2_pixel_blocks(s2_tif, target_pixels, block_size=80):
+    # Given a set of target pixels, return a list of arrays which contain the BSxBS pixel blocks with all 3 RGB bands
     radius = block_size // 2
 
     with rasterio.open(s2_tif) as src:
@@ -200,7 +462,7 @@ def find_matching_lc_pixel_classes(lc_tif, s2_tif, valid_target_pixels):
     return roi_classes, utm_coords, albers_coords, lat_lon_coords
 
 
-def generate_roi_list(location_names, s2_data_folder, lc_data_folder, year="2021", month="09"):
+def generate_roi_list(location_names, s2_data_folder, lc_data_folder, year="2021", months=None):
     """
     Generate a list of ROI dictionaries based on location names.
     
@@ -214,43 +476,75 @@ def generate_roi_list(location_names, s2_data_folder, lc_data_folder, year="2021
         Path to the folder containing land cover data
     year : str, optional
         Year for the data (default: "2021")
-    month : str, optional
-        Month for the Sentinel-2 data (default: "09")
+    months : list of str, optional
+        List of months for time series (e.g., ["05", "06", "07", "08", "09"])
+        If None, will use single-image approach
         
     Returns:
     --------
     roi_list : list of dict
-        List of dictionaries with 'name', 's2_path', and 'lc_path' for each location
+        List of dictionaries with paths for each location
     """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
-    s2_data_folder = os.path.join(project_root, 'data', 'raw', 'sentinel2_imagery')
-    lc_data_folder = os.path.join(project_root, 'data', 'raw', 'USFS_land_cover')
-
     roi_list = []
-    
-    for location_name in location_names:
-        # Convert location name to filename format (lowercase, underscores)
-        location_slug = location_name.lower().replace(" ", "_")
-        
-        # Construct file paths
-        lc_path = os.path.join(lc_data_folder, f"landcover_30m_{location_slug}_{year}.tif")
-        if not os.path.exists(lc_path):
-            print(f"Warning: Land cover file not found: {lc_path}")
-            continue
 
-        s2_path = os.path.join(s2_data_folder, f"sentinel2_10m_{location_slug}_{year}-{month}.tif")
-        if not os.path.exists(s2_path):
-            print(f"Warning: Sentinel-2 file not found: {s2_path}")
-            continue
-        
-        # Add to ROI list
-        roi_list.append({
-            'name': location_name,
-            's2_path': s2_path,
-            'lc_path': lc_path
-        })
-        
+    if months is None:
+        # Single-image approach
+        default_month = "07"
+        for location_name in location_names:
+            location_slug = location_name.lower().replace(" ", "_")
+            
+            lc_path = os.path.join(lc_data_folder, f"landcover_30m_{location_slug}_{year}.tif")
+            s2_path = os.path.join(s2_data_folder, 'rgb_nir_tifs', f"sentinel2_10m_{location_slug}_{year}-{default_month}.tif")
+            
+            if not os.path.exists(lc_path):
+                print(f"Warning: Land cover file not found: {lc_path}")
+                continue
+                
+            if not os.path.exists(s2_path):
+                print(f"Warning: Sentinel-2 file not found: {s2_path}")
+                continue
+            
+            roi_list.append({
+                'name': location_name,
+                's2_path': s2_path,
+                'lc_path': lc_path
+            })
+    else:
+        # Time series approach
+        for location_name in location_names:
+            location_slug = location_name.lower().replace(" ", "_")
+            
+            # Check land cover file
+            lc_path = os.path.join(lc_data_folder, f"landcover_30m_{location_slug}_{year}.tif")
+            if not os.path.exists(lc_path):
+                print(f"Warning: Land cover file not found: {lc_path}")
+                continue
+            
+            # Check all S2 files exist
+            s2_paths = []
+            all_exist = True
+            
+            for i, month in enumerate(months):
+                s2_path = os.path.join(s2_data_folder, f"sentinel2_10m_{location_slug}_{year}-{month}.tif")
+                s2_paths.append(s2_path)
+                
+                if not os.path.exists(s2_path):
+                    print(f"Warning: Sentinel-2 file not found: {s2_path}")
+                    all_exist = False
+                    break
+            
+            # Only add ROI if all files exist
+            if all_exist:
+                roi_dict = {'name': location_name, 'lc_path': lc_path}
+                
+                # Add numbered paths
+                for i, path in enumerate(s2_paths):
+                    roi_dict[f's2_path_{i+1}'] = path
+                
+                roi_list.append(roi_dict)
+            else:
+                print(f"Skipping {location_name} due to missing files")
+
     return roi_list
 
 
@@ -270,28 +564,30 @@ if __name__ == "__main__":
         "Saguache",
         "Kit_Carson",
         "Cripple_Creek",
-        "Montrose",
-        "Cortez",
-        "Durango",
-        "Lizard_Head",
-        "Ridgway",
-        "Uncompahgre",
-        "Yuma",
-        "Centennial",
-        "Gunnison",
-        "Powderhorn",
-        "Lake_City",
+        # "Montrose",
+        # "Cortez",
+        # "Durango",
+        # "Lizard_Head",
+        # "Ridgway",
+        # "Uncompahgre",
+        # "Yuma",
+        # "Centennial",
+        # "Gunnison",
+        # "Powderhorn",
+        # "Lake_City",
         "Monte_Vista"
     ]
 
     # Generate the ROI list
-    roi_list = generate_roi_list(location_names, s2_data_folder, lc_data_folder)
+    months = ['05', '06',' 07', '08', '09']
+    year = '2021'
+    roi_list = generate_roi_list(location_names, s2_data_folder, lc_data_folder, year, months)
 
     print(f"Generated ROI list with {len(roi_list)} valid locations:")
     for roi in roi_list:
         print(f"  - {roi['name']}")
     
-    block_size = 15
+    block_size = 64
     sample_size = 100
     
     print(f"Testing configuration:")

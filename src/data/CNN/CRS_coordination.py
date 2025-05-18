@@ -2,9 +2,8 @@ import rasterio
 import os
 import sys
 import numpy as np
-import folium
 import tempfile
-from folium.plugins import MeasureControl
+import traceback
 from rasterio.warp import transform
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -18,9 +17,9 @@ if str(root_dir) not in sys.path:
     sys.path.append(str(root_dir))
 from src.data.CNN.cnn_data_generator import generate_training_samples
 
-def visualize_sentinel2_file(tif_path, figsize=(24, 20), enhancement=1.0):
+def visualize_sentinel2_file(tif_path, figsize=(24, 8), enhancement=1.0):
     """
-    Visualize a single Sentinel-2 TIF file with diagnostics.
+    Visualize a single Sentinel-2 TIF file with diagnostics, supporting NIR band.
     
     Parameters:
     -----------
@@ -49,12 +48,12 @@ def visualize_sentinel2_file(tif_path, figsize=(24, 20), enhancement=1.0):
             # Create figure with multiple components
             fig = plt.figure(figsize=figsize)
             
-            # 1. RGB True Color Image
+            # 1. RGB True Color Image (Bands 0,1,2 = B2,B3,B4)
             ax1 = fig.add_subplot(131)
             
             # Normalize RGB bands with percentile stretching
             rgb = np.zeros((3, src.height, src.width), dtype=np.float32)
-            for i in range(min(3, src.count)):
+            for i in range(3):  # Only the first 3 bands for RGB
                 band = data[i].astype(np.float32)
                 if band.max() > band.min():
                     # Get 2% and 98% percentile values
@@ -70,34 +69,59 @@ def visualize_sentinel2_file(tif_path, figsize=(24, 20), enhancement=1.0):
             
             # Display RGB image
             ax1.imshow(rgb_composite)
-            ax1.set_title('RGB True Color')
+            ax1.set_title('RGB True Color (B2,B3,B4)')
             ax1.axis('off')
             
-            # 2. Histogram of values by band
-            # ax2 = fig.add_subplot(132)
-            # colors = ['blue', 'green', 'red']
-            # for i in range(min(3, src.count)):
-            #     band = data[i].flatten()
-            #     band = band[band > 0]  # Remove zeros for better histogram
-            #     if len(band) > 0:
-            #         ax2.hist(band, bins=50, alpha=0.5, label=f'Band {i+1}', color=colors[i])
+            # 2. False Color Composite (NIR,Red,Green = B8,B4,B3)
+            ax2 = fig.add_subplot(132)
             
-            # ax2.set_title('Histogram (non-zero values)')
-            # ax2.set_xlabel('Pixel Value')
-            # ax2.set_ylabel('Frequency')
-            # ax2.legend()
+            # Check if we have NIR band (B8)
+            if src.count >= 4:
+                false_color = np.zeros((3, src.height, src.width), dtype=np.float32)
+                
+                # Order: NIR, Red, Green (B8,B4,B3)
+                band_indices = [3, 2, 1]  # B8, B4, B3
+                
+                for i, band_idx in enumerate(band_indices):
+                    band = data[band_idx].astype(np.float32)
+                    if band.max() > band.min():
+                        low = np.percentile(band[band > 0], 2)
+                        high = np.percentile(band, 98)
+                        band_norm = np.clip((band - low) / (high - low) * enhancement, 0, 1)
+                        false_color[i] = band_norm
+                
+                # Create false color composite
+                false_color_composite = np.transpose(false_color, (1, 2, 0))
+                
+                # Display false color image
+                ax2.imshow(false_color_composite)
+                ax2.set_title('False Color (NIR,Red,Green)')
+            else:
+                ax2.text(0.5, 0.5, 'NIR band not available', 
+                         ha='center', va='center', fontsize=12)
+            ax2.axis('off')
             
-            # 3. First Band as Grayscale (to check if data exists)
-            # ax3 = fig.add_subplot(133)
-            # band1 = data[0].astype(np.float32)
-            # if band1.max() > band1.min():
-            #     band1_norm = (band1 - band1.min()) / (band1.max() - band1.min())
-            #     ax3.imshow(band1_norm, cmap='gray')
-            # else:
-            #     ax3.text(0.5, 0.5, 'No Data', ha='center', va='center')
+            # 3. NDVI (if NIR is available)
+            ax3 = fig.add_subplot(133)
             
-            # ax3.set_title('Band 1 (Blue) Grayscale')
-            # ax3.axis('off')
+            if src.count >= 4:
+                # Calculate NDVI
+                nir = data[3].astype(np.float32)  # B8
+                red = data[2].astype(np.float32)  # B4
+                
+                # Avoid division by zero
+                ndvi = np.zeros_like(nir)
+                valid = (nir + red) > 0
+                ndvi[valid] = (nir[valid] - red[valid]) / (nir[valid] + red[valid])
+                
+                # Display NDVI
+                ndvi_plot = ax3.imshow(ndvi, cmap='RdYlGn', vmin=-1, vmax=1)
+                ax3.set_title('NDVI')
+                plt.colorbar(ndvi_plot, ax=ax3, fraction=0.046, pad=0.04)
+            else:
+                ax3.text(0.5, 0.5, 'NIR band not available for NDVI', 
+                         ha='center', va='center', fontsize=12)
+            ax3.axis('off')
             
             plt.tight_layout()
             plt.show()
@@ -110,10 +134,11 @@ def visualize_sentinel2_file(tif_path, figsize=(24, 20), enhancement=1.0):
             
     except Exception as e:
         print(f"Error visualizing {tif_path}: {str(e)}")
+        traceback.print_exc()  # Print full traceback for debugging
         return None
-    
 
-def visualize_multiple_tifs(tif_paths, rows=None, cols=None, figsize=(16, 12)):
+
+def visualize_multiple_tifs(tif_paths, rows=None, cols=None, figsize=(16, 12), vis_type='rgb'):
     """
     Visualize multiple Sentinel-2 TIF files in a grid layout.
     
@@ -125,6 +150,8 @@ def visualize_multiple_tifs(tif_paths, rows=None, cols=None, figsize=(16, 12)):
         Number of rows and columns in the grid
     figsize : tuple
         Figure size for the plot
+    vis_type : str
+        Visualization type: 'rgb', 'false_color', or 'ndvi'
     """
     n = len(tif_paths)
     print(f"Number of tifs to visualize: {n}")
@@ -158,27 +185,80 @@ def visualize_multiple_tifs(tif_paths, rows=None, cols=None, figsize=(16, 12)):
         try:
             with rasterio.open(tif_path) as src:
                 # Read data
-                data = src.read()  
-
-                # Create RGB composite with enhancement
-                rgb = np.zeros((3, src.height, src.width), dtype=np.float32)
-                for j in range(min(3, src.count)):
-                    band = data[j].astype(np.float32)
-                    if band.max() > band.min():
-                        # Get 2% and 98% percentile values for better contrast
-                        low = np.percentile(band[band > 0] if np.any(band > 0) else band, 2)
-                        high = np.percentile(band, 98)
-                        
-                        # Apply contrast stretch with enhancement
-                        band_norm = np.clip((band - low) / (high - low) * 1.0, 0, 1)
-                        rgb[j] = band_norm
+                data = src.read()
                 
-                # Create RGB composite
-                rgb_composite = np.transpose(rgb, (1, 2, 0))
+                if vis_type == 'rgb':
+                    # RGB True Color (B2,B3,B4)
+                    composite = np.zeros((3, src.height, src.width), dtype=np.float32)
+                    for j in range(min(3, src.count)):
+                        band = data[j].astype(np.float32)
+                        if band.max() > band.min():
+                            low = np.percentile(band[band > 0] if np.any(band > 0) else band, 2)
+                            high = np.percentile(band, 98)
+                            band_norm = np.clip((band - low) / (high - low), 0, 1)
+                            composite[j] = band_norm
+                    
+                    title_suffix = 'RGB'
+                    cmap = None
                 
-                # Display RGB image
-                ax.imshow(rgb_composite)
-                ax.set_title(os.path.basename(tif_path), fontsize=10)
+                elif vis_type == 'false_color' and src.count >= 4:
+                    # False Color (NIR,Red,Green)
+                    composite = np.zeros((3, src.height, src.width), dtype=np.float32)
+                    band_indices = [3, 2, 1]  # B8, B4, B3
+                    
+                    for j, band_idx in enumerate(band_indices):
+                        band = data[band_idx].astype(np.float32)
+                        if band.max() > band.min():
+                            low = np.percentile(band[band > 0] if np.any(band > 0) else band, 2)
+                            high = np.percentile(band, 98)
+                            band_norm = np.clip((band - low) / (high - low), 0, 1)
+                            composite[j] = band_norm
+                    
+                    title_suffix = 'False Color'
+                    cmap = None
+                
+                elif vis_type == 'ndvi' and src.count >= 4:
+                    # NDVI
+                    nir = data[3].astype(np.float32)  # B8
+                    red = data[2].astype(np.float32)  # B4
+                    
+                    # Avoid division by zero
+                    composite = np.zeros_like(nir)
+                    valid = (nir + red) > 0
+                    composite[valid] = (nir[valid] - red[valid]) / (nir[valid] + red[valid])
+                    
+                    title_suffix = 'NDVI'
+                    cmap = 'RdYlGn'
+                
+                else:
+                    # If requested type isn't available, fall back to RGB
+                    composite = np.zeros((3, src.height, src.width), dtype=np.float32)
+                    for j in range(min(3, src.count)):
+                        band = data[j].astype(np.float32)
+                        if band.max() > band.min():
+                            low = np.percentile(band[band > 0] if np.any(band > 0) else band, 2)
+                            high = np.percentile(band, 98)
+                            band_norm = np.clip((band - low) / (high - low), 0, 1)
+                            composite[j] = band_norm
+                    
+                    title_suffix = 'RGB (fallback)'
+                    cmap = None
+                
+                # Create final visualization
+                if vis_type == 'ndvi':
+                    # For NDVI, keep as 2D array with colormap
+                    im = ax.imshow(composite, cmap=cmap, vmin=-1, vmax=1)
+                else:
+                    # For RGB/False color, transpose to (H,W,3)
+                    composite = np.transpose(composite, (1, 2, 0))
+                    im = ax.imshow(composite)
+                
+                # Add colorbar for NDVI
+                if vis_type == 'ndvi':
+                    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+                
+                # Display title and info
+                ax.set_title(f"{os.path.basename(tif_path)}\n{title_suffix}", fontsize=10)
                 ax.axis('off')
                 
                 # Print info below the subplot
