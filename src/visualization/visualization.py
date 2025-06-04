@@ -45,10 +45,10 @@ def get_blocks_and_classes(s2_tif, lc_tif=None):
         valid_targets = []
 
         print(f"Retrieving pixel blocks from s2 tif of size {height} x {width}, with a total of {height * width} pixels")
-        for row in range(350, (height - 350)):
+        for row in range(450, (height - 450)):
             if (row + 1) % 200 == 0:
                 print(f"Processing {row}th row / {height}")
-            for col in range(350, (width - 350)):               
+            for col in range(450, (width - 450)):               
                 row_start = row - radius
                 row_end = row + radius + 1  # +1 because slicing is exclusive
                 col_start = col - radius
@@ -155,7 +155,7 @@ def visualize_tif(roi, tif_layers=False, usfs=True):
                     comparison_array[row, col] = 2
                     dif += 1
 
-        print(f"{round((dif/len(blocks))*100), 2}% of pixels predicted incorrectly.")
+        print(f"{round((dif/len(blocks))*100), 2}% of pixels predicted differently.")
 
         # Apply the valid pixel mask to both the prediction and comparison arrays
         if usfs == True:

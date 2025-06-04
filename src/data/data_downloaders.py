@@ -210,14 +210,22 @@ if __name__ == "__main__":
         # 7 ag        
         # 7 wild      \
         #     # New ROIs, different from training, W/O USFS data to compare to
+        # {
+        #     'name': 'canada',
+        #     'bounds': [-105.877991,50.080057,-105.678864,50.200638]
+        # },
+        # {
+        #     'name': 'france',
+        #     'bounds': [5.261078,45.371443,5.454712,45.503459]
+        # }
         {
-            'name': 'canada',
-            'bounds': [-105.877991,50.080057,-105.678864,50.200638]
-        },
-        {
-            'name': 'france',
-            'bounds': [5.261078,45.371443,5.454712,45.503459]
+            'name': 'laporte',
+            'bounds': [-105.308511,40.420728,-105.158823,40.567542]
         }
+        # {
+        #     'name': 'steamboat',
+        #     'bounds': [-107.009583,40.675431,-106.836548,40.848099]
+        # }
         # {
         #     'name': 'amazon',
         #     'bounds': [-54.971952,-13.693802,-54.839130,-13.558891]
@@ -357,5 +365,5 @@ if __name__ == "__main__":
     # Initialize Earth Engine
     ee.Initialize(project='agedgeeffects')
 
-    download_sentinel2_data('2021-07-01', '2021-07-30', roi_list, cloud_percentage=20, bands=None)
-    # download_USFS_data('2021', '2022', roi_list)
+    # download_sentinel2_data('2021-07-01', '2021-07-30', roi_list, cloud_percentage=20, bands=None)
+    download_USFS_data('2021', '2022', roi_list)
